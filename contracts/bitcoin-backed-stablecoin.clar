@@ -68,3 +68,84 @@
             (ok (/ (* collateral-value u100) debt-value)))
     )
 )
+
+;; Fetch current BTC price
+(define-read-only (get-current-price)
+    (ok (var-get btc-price))
+)
+
+;; Private Functions
+
+;; Ensure the BTC price is up-to-date
+(define-private (check-price-freshness)
+    (if (< (- block-height (var-get last-price-update)) PRICE-VALIDITY-PERIOD)
+        (ok true)
+        ERR-PRICE-EXPIRED
+    )
+)
+
+;; Validate minimum collateral deposit
+(define-private (check-min-collateral (amount uint))
+    (if (>= amount MIN-DEPOSIT)
+        (ok true)
+        ERR-BELOW-MINIMUM
+    )
+)
+
+;; Check if a position is healthy (above liquidation threshold)
+(define-private (check-position-health (user principal))
+    (let (
+        (ratio (unwrap! (get-collateral-ratio user) (err u0)))
+    )
+        (if (< ratio MIN-COLLATERAL-RATIO)
+            ERR-INSUFFICIENT-COLLATERAL
+            (ok true))
+    )
+)
+
+;; Public Functions
+
+;; Deposit Bitcoin collateral
+(define-public (deposit-collateral (amount uint))
+    (begin
+        (try! (check-min-collateral amount))
+        (let (
+            (current-position (default-to 
+                { collateral: u0, debt: u0, last-update: block-height }
+                (get-position tx-sender)
+            ))
+        )
+            (map-set user-positions tx-sender
+                {
+                    collateral: (+ amount (get collateral current-position)),
+                    debt: (get debt current-position),
+                    last-update: block-height
+                }
+            )
+            (ok true))
+    )
+)
+
+;; Mint stablecoins against deposited collateral
+(define-public (mint-stablecoin (amount uint))
+    (begin
+        (try! (check-price-freshness))
+        (let (
+            (current-position (unwrap! (get-position tx-sender) ERR-POSITION-NOT-FOUND))
+            (new-debt (+ amount (get debt current-position)))
+            (collateral-value (* (get collateral current-position) (var-get btc-price)))
+            (required-collateral (* new-debt MIN-COLLATERAL-RATIO))
+        )
+            (asserts! (>= collateral-value required-collateral) ERR-INSUFFICIENT-COLLATERAL)
+            
+            (map-set user-positions tx-sender
+                {
+                    collateral: (get collateral current-position),
+                    debt: new-debt,
+                    last-update: block-height
+                }
+            )
+            (var-set total-supply (+ (var-get total-supply) amount))
+            (ok true))
+    )
+)
