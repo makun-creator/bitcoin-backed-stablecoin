@@ -16,6 +16,8 @@
 (define-constant ERR-ALREADY-LIQUIDATED (err u1005))
 (define-constant ERR-HEALTHY-POSITION (err u1006))
 (define-constant ERR-PRICE-EXPIRED (err u1007))
+(define-constant MAX-DEPOSIT u100000000000) ;; Maximum deposit amount (satoshis)
+(define-constant MAX-BTC-PRICE u1000000000000) ;; Maximum BTC price (e.g., $1,000,000)
 
 ;; System Parameters
 (define-constant MIN-COLLATERAL-RATIO u150) ;; Minimum collateralization ratio (150%)
@@ -103,21 +105,32 @@
     )
 )
 
+;; Helper function to check if a principal is valid
+(define-private (is-valid-principal (user principal))
+    (let ((buff (unwrap! (to-consensus-buff? user) false))) ;; Unwrap the optional buff
+        (is-eq (len buff) u20) ;; Check if the buff length is 20 bytes
+    )
+)
+
 ;; Public Functions
 
 ;; Deposit Bitcoin collateral
 (define-public (deposit-collateral (amount uint))
     (begin
         (try! (check-min-collateral amount))
+        (asserts! (<= amount MAX-DEPOSIT) ERR-INVALID-AMOUNT)
         (let (
             (current-position (default-to 
                 { collateral: u0, debt: u0, last-update: stacks-block-height }
                 (get-position tx-sender)
             ))
+            (new-collateral (+ amount (get collateral current-position)))
         )
+            ;; Ensure no overflow occurred
+            (asserts! (>= new-collateral (get collateral current-position)) ERR-INVALID-AMOUNT)
             (map-set user-positions tx-sender
                 {
-                    collateral: (+ amount (get collateral current-position)),
+                    collateral: new-collateral,
                     debt: (get debt current-position),
                     last-update: stacks-block-height
                 }
@@ -125,6 +138,7 @@
             (ok true))
     )
 )
+
 
 ;; Mint stablecoins against deposited collateral
 (define-public (mint-stablecoin (amount uint))
@@ -228,6 +242,7 @@
 (define-public (set-price (new-price uint))
     (begin
         (asserts! (is-eq tx-sender (var-get price-oracle)) ERR-NOT-AUTHORIZED)
+        (asserts! (and (> new-price u0) (< new-price MAX-BTC-PRICE)) ERR-INVALID-AMOUNT)
         (var-set btc-price new-price)
         (var-set last-price-update stacks-block-height)
         (ok true))
@@ -237,6 +252,7 @@
 (define-public (set-price-oracle (new-oracle principal))
     (begin
         (asserts! (is-eq tx-sender (var-get contract-owner)) ERR-NOT-AUTHORIZED)
+        (asserts! (is-valid-principal new-oracle) ERR-NOT-AUTHORIZED)
         (var-set price-oracle new-oracle)
         (ok true))
 )
