@@ -149,3 +149,75 @@
             (ok true))
     )
 )
+
+;; Repay stablecoin debt
+(define-public (repay-stablecoin (amount uint))
+    (let (
+        (current-position (unwrap! (get-position tx-sender) ERR-POSITION-NOT-FOUND))
+    )
+        (asserts! (>= (get debt current-position) amount) ERR-INVALID-AMOUNT)
+        
+        (map-set user-positions tx-sender
+            {
+                collateral: (get collateral current-position),
+                debt: (- (get debt current-position) amount),
+                last-update: block-height
+            }
+        )
+        (var-set total-supply (- (var-get total-supply) amount))
+        (ok true)
+    )
+)
+
+;; Withdraw Bitcoin collateral
+(define-public (withdraw-collateral (amount uint))
+    (let (
+        (current-position (unwrap! (get-position tx-sender) ERR-POSITION-NOT-FOUND))
+    )
+        (asserts! (>= (get collateral current-position) amount) ERR-INVALID-AMOUNT)
+        
+        (map-set user-positions tx-sender
+            {
+                collateral: (- (get collateral current-position) amount),
+                debt: (get debt current-position),
+                last-update: block-height
+            }
+        )
+        (try! (check-position-health tx-sender))
+        (ok true)
+    )
+)
+
+;; Liquidate an undercollateralized position
+(define-public (liquidate-position (user principal))
+    (begin
+        (try! (check-price-freshness))
+        (let (
+            (position (unwrap! (get-position user) ERR-POSITION-NOT-FOUND))
+            (ratio (unwrap! (get-collateral-ratio user) ERR-POSITION-NOT-FOUND))
+        )
+            (asserts! (< ratio LIQUIDATION-RATIO) ERR-HEALTHY-POSITION)
+            
+            ;; Record liquidation
+            (map-set liquidation-history user
+                {
+                    timestamp: block-height,
+                    collateral-liquidated: (get collateral position),
+                    debt-repaid: (get debt position)
+                }
+            )
+            
+            ;; Clear position
+            (map-set user-positions user
+                {
+                    collateral: u0,
+                    debt: u0,
+                    last-update: block-height
+                }
+            )
+            
+            ;; Update total supply
+            (var-set total-supply (- (var-get total-supply) (get debt position)))
+            (ok true))
+    )
+)
